@@ -2,9 +2,9 @@
 import json
 from collections import defaultdict
 
-from PyQt5 import QtCore
-from PyQt5.QtCore import pyqtSignal, QObject
-from PyQt5.QtWidgets import QVBoxLayout, QCheckBox, QGridLayout, QLabel, QWidget, QSizePolicy, QTabWidget, QSpinBox, \
+from qt_compat import QtCore
+from qt_compat.QtCore import pyqtSignal, QObject
+from qt_compat.QtWidgets import QVBoxLayout, QCheckBox, QGridLayout, QLabel, QWidget, QSizePolicy, QTabWidget, QSpinBox, \
     QHBoxLayout, QPushButton, QMessageBox
 
 from editor.basic_editor import BasicEditor

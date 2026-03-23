@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
-from PyQt5 import QtCore
-from PyQt5.QtCore import pyqtSignal, QObject
-from PyQt5.QtGui import QColor
-from PyQt5.QtWidgets import QWidget, QPushButton, QHBoxLayout, QSizePolicy, QGridLayout, QLabel, QSlider, \
+from qt_compat import QtCore
+from qt_compat.QtCore import pyqtSignal, QObject
+from qt_compat.QtGui import QColor
+from qt_compat.QtWidgets import QWidget, QPushButton, QHBoxLayout, QSizePolicy, QGridLayout, QLabel, QSlider, \
     QComboBox, QColorDialog, QCheckBox
 
 from editor.basic_editor import BasicEditor

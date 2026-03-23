@@ -1,4 +1,4 @@
-from PyQt5.QtCore import pyqtSignal
+from qt_compat.QtCore import pyqtSignal
 
 from keycodes.keycodes import Keycode
 from any_keycode_dialog import AnyKeycodeDialog

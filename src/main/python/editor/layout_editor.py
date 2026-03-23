@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
-from PyQt5 import QtCore
-from PyQt5.QtCore import pyqtSignal
-from PyQt5.QtWidgets import QLabel, QCheckBox, QComboBox, QGridLayout, QWidget, QSizePolicy
+from qt_compat import QtCore
+from qt_compat.QtCore import pyqtSignal
+from qt_compat.QtWidgets import QLabel, QCheckBox, QComboBox, QGridLayout, QWidget, QSizePolicy
 
 from editor.basic_editor import BasicEditor
 from widgets.keyboard_widget import KeyboardWidget

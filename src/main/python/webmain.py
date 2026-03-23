@@ -3,8 +3,8 @@ import os
 
 import traceback
 
-from PyQt5 import QtWidgets, QtCore
-from PyQt5.QtCore import pyqtSignal
+from qt_compat import QtWidgets, QtCore
+from qt_compat.QtCore import pyqtSignal
 
 import sys
 import json

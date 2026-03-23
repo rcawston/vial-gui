@@ -1,5 +1,5 @@
-from PyQt5.QtWidgets import QWidget
-from PyQt5.QtCore import pyqtSignal
+from qt_compat.QtWidgets import QWidget
+from qt_compat.QtCore import pyqtSignal
 
 
 class EditorContainer(QWidget):

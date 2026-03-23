@@ -2,9 +2,9 @@
 import sys
 import time
 
-from PyQt5.QtCore import Qt, QTimer, QCoreApplication, QByteArray, QBuffer, QIODevice
-from PyQt5.QtGui import QPalette
-from PyQt5.QtWidgets import QVBoxLayout, QLabel, QProgressBar, QDialog, QApplication
+from qt_compat.QtCore import Qt, QTimer, QCoreApplication, QByteArray, QBuffer, QIODevice
+from qt_compat.QtGui import QPalette
+from qt_compat.QtWidgets import QVBoxLayout, QLabel, QProgressBar, QDialog, QApplication
 
 from widgets.keyboard_widget import KeyboardWidget
 from util import tr

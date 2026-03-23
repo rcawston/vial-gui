@@ -2,8 +2,8 @@ import lzma
 import os.path
 import struct
 
-from PyQt5.QtCore import QPoint
-from PyQt5.QtWidgets import QPushButton
+from qt_compat.QtCore import QPoint
+from qt_compat.QtWidgets import QPushButton
 from pytestqt.qt_compat import qt_api
 
 from main_window import MainWindow
@@ -527,7 +527,7 @@ def test_combos(qtbot):
 
 def test_tap_dance(qtbot):
     from widgets.key_widget import KeyWidget
-    from PyQt5.QtWidgets import QSpinBox
+    from qt_compat.QtWidgets import QSpinBox
 
     mw, vk = prepare(qtbot, FAKE_KEYBOARD, tap_dance=[[0, 0, 0, 0, 200], [4, 5, 6, 7, 200], [0, 0x106, 0, 0, 500]])
 

@@ -8,14 +8,12 @@ if ssl.get_default_verify_paths().cafile is None:
 
 import traceback
 
-from PyQt5 import QtWidgets, QtCore
-from PyQt5.QtCore import pyqtSignal
-
-from fbs_runtime.application_context import cached_property
-from fbs_runtime.application_context.PyQt5 import ApplicationContext
+from PyQt6 import QtWidgets, QtCore
+from PyQt6.QtCore import pyqtSignal
 
 import sys
 
+from app_context import AppContext
 from main_window import MainWindow
 
 
@@ -55,31 +53,20 @@ class UncaughtHook(QtCore.QObject):
             self._exception_caught.emit(log_msg)
         sys._excepthook(exc_type, exc_value, exc_traceback)
 
-class VialApplicationContext(ApplicationContext):
-    @cached_property
-    def app(self):
-        # Override the app definition in order to set WM_CLASS.
-        result = QtWidgets.QApplication(sys.argv)
-        result.setApplicationName(self.build_settings["app_name"])
-        result.setOrganizationDomain("vial.today")
-
-        #TODO: Qt sets applicationVersion on non-Linux platforms if the exe/pkg metadata is correctly configured.
-        # https://doc.qt.io/qt-5/qcoreapplication.html#applicationVersion-prop
-        # Verify it is, and only set manually on Linux.
-        #if sys.platform.startswith("linux"):
-        result.setApplicationVersion(self.build_settings["version"])
-        return result
-
 if __name__ == '__main__':
     if len(sys.argv) == 2 and sys.argv[1] == "--linux-recorder":
         from linux_keystroke_recorder import linux_keystroke_recorder
 
         linux_keystroke_recorder()
     else:
-        appctxt = VialApplicationContext()       # 1. Instantiate ApplicationContext
+        appctxt = AppContext()
+        app = QtWidgets.QApplication(sys.argv)
+        app.setApplicationName(appctxt.build_settings["app_name"])
+        app.setOrganizationDomain("vial.today")
+        app.setApplicationVersion(appctxt.build_settings["version"])
         init_logger()
         qt_exception_hook = UncaughtHook()
         window = MainWindow(appctxt)
         window.show()
-        exit_code = appctxt.app.exec_()      # 2. Invoke appctxt.app.exec_()
+        exit_code = app.exec()
         sys.exit(exit_code)

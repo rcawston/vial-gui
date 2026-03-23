@@ -3,8 +3,8 @@ import logging
 import platform
 from json import JSONDecodeError
 
-from PyQt5.QtCore import Qt, QSettings, QStandardPaths, QTimer, QRect, QT_VERSION_STR
-from PyQt5.QtWidgets import QWidget, QComboBox, QToolButton, QHBoxLayout, QVBoxLayout, QMainWindow, QAction, qApp, \
+from qt_compat.QtCore import Qt, QSettings, QStandardPaths, QTimer, QRect, QT_VERSION_STR
+from qt_compat.QtWidgets import QWidget, QComboBox, QToolButton, QHBoxLayout, QVBoxLayout, QMainWindow, QAction, qApp, \
     QFileDialog, QDialog, QTabWidget, QActionGroup, QMessageBox, QLabel
 
 import os
@@ -312,9 +312,9 @@ class MainWindow(QMainWindow):
     def on_device_selected(self):
         try:
             self.autorefresh.select_device(self.combobox_devices.currentIndex())
-        except ProtocolError:
-            QMessageBox.warning(self, "", "Unsupported protocol version!\n"
-                                          "Please download latest Vial from https://get.vial.today/")
+        except ProtocolError as exc:
+            QMessageBox.warning(self, "", "Unsupported protocol version!\n{}\n\n"
+                                          "Please download latest Vial from https://get.vial.today/".format(exc))
 
         if isinstance(self.autorefresh.current_device, VialKeyboard):
             keyboard_id = self.autorefresh.current_device.keyboard.keyboard_id

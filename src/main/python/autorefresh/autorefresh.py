@@ -1,6 +1,6 @@
 import sys
 
-from PyQt5.QtCore import QObject, pyqtSignal
+from qt_compat.QtCore import QObject, pyqtSignal
 
 
 class AutorefreshLocker:

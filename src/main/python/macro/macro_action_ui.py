@@ -1,5 +1,5 @@
-from PyQt5.QtCore import QObject, pyqtSignal, Qt
-from PyQt5.QtWidgets import QLineEdit, QToolButton, QWidget, QSizePolicy, QSpinBox
+from qt_compat.QtCore import QObject, pyqtSignal, Qt
+from qt_compat.QtWidgets import QLineEdit, QToolButton, QWidget, QSizePolicy, QSpinBox
 
 from constants import KEY_SIZE_RATIO
 from tabbed_keycodes import TabbedKeycodes

@@ -1,17 +1,8 @@
 import json
 import time
-import sys
+from threading import RLock
 
-if sys.platform == "emscripten":
-    class RLock:
-        def __enter__(self):
-            pass
-        def __exit__(self, *args):
-            pass
-else:
-    from multiprocessing import RLock
-
-from PyQt5.QtCore import pyqtSignal, QThread
+from qt_compat.QtCore import pyqtSignal, QThread
 
 from util import find_vial_devices
 

@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
-from PyQt5.QtWidgets import QVBoxLayout, QPushButton, QWidget, QHBoxLayout, QLabel
-from PyQt5.QtCore import Qt, QTimer
+from qt_compat.QtWidgets import QVBoxLayout, QPushButton, QWidget, QHBoxLayout, QLabel
+from qt_compat.QtCore import Qt, QTimer
 
 import math
 

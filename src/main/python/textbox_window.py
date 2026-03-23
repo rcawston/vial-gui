@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
-from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QVBoxLayout, QHBoxLayout, QDialog, QDialogButtonBox, \
+from qt_compat.QtCore import Qt
+from qt_compat.QtWidgets import QVBoxLayout, QHBoxLayout, QDialog, QDialogButtonBox, \
     QPlainTextEdit, QToolButton, QFileDialog, QWidget
 
 from util import tr

@@ -24,8 +24,8 @@ from protocol.tap_dance import ProtocolTapDance
 from unlocker import Unlocker
 from util import MSG_LEN, hid_send
 
-SUPPORTED_VIA_PROTOCOL = [-1, 9]
-SUPPORTED_VIAL_PROTOCOL = [-1, 0, 1, 2, 3, 4, 5, 6]
+SUPPORTED_VIA_PROTOCOL = [-1, 9, 12]
+SUPPORTED_VIAL_PROTOCOL = [-1, 0, 1, 2, 3, 4, 5, 6, 7]
 
 
 class ProtocolError(Exception):
@@ -109,7 +109,9 @@ class Keyboard(ProtocolMacro, ProtocolDynamic, ProtocolTapDance, ProtocolCombo, 
 
     def check_protocol_version(self):
         if self.via_protocol not in SUPPORTED_VIA_PROTOCOL or self.vial_protocol not in SUPPORTED_VIAL_PROTOCOL:
-            raise ProtocolError()
+            raise ProtocolError(
+                "Unsupported protocol versions: VIA={}, Vial={}".format(self.via_protocol, self.vial_protocol)
+            )
 
     def reload_layout(self, sideload_json=None):
         """ Requests layout data from the current device """

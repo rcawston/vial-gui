@@ -6,9 +6,9 @@ import sys
 import time
 from logging.handlers import RotatingFileHandler
 
-from PyQt5.QtCore import QCoreApplication, QStandardPaths
-from PyQt5.QtGui import QPalette
-from PyQt5.QtWidgets import QApplication, QWidget, QScrollArea, QFrame
+from qt_compat.QtCore import QCoreApplication, QStandardPaths
+from qt_compat.QtGui import QPalette
+from qt_compat.QtWidgets import QApplication, QWidget, QScrollArea, QFrame
 
 from hidproxy import hid
 from keycodes.keycodes import Keycode
@@ -37,7 +37,7 @@ EXAMPLE_KEYBOARDS = [
 EXAMPLE_KEYBOARD_PREFIX = 0xA6867BDFD3B00F
 
 
-def hid_send(dev, msg, retries=1):
+def hid_send(dev, msg, retries=1, timeout_ms=500):
     if len(msg) > MSG_LEN:
         raise RuntimeError("message must be less than 32 bytes")
     msg += b"\x00" * (MSG_LEN - len(msg))
@@ -55,7 +55,7 @@ def hid_send(dev, msg, retries=1):
             if dev.write(b"\x00" + msg) != MSG_LEN + 1:
                 continue
 
-            data = bytes(dev.read(MSG_LEN, timeout_ms=500))
+            data = bytes(dev.read(MSG_LEN, timeout_ms=timeout_ms))
             if not data:
                 continue
         except OSError:

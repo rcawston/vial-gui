@@ -1,7 +1,7 @@
 # coding: utf-8
 # SPDX-License-Identifier: GPL-2.0-or-later
-from PyQt5.QtCore import QObject, pyqtSignal, Qt
-from PyQt5.QtWidgets import QHBoxLayout, QToolButton, QComboBox
+from qt_compat.QtCore import QObject, pyqtSignal, Qt
+from qt_compat.QtWidgets import QHBoxLayout, QToolButton, QComboBox
 
 from macro.macro_action_ui import ActionTextUI, ActionDownUI, ActionUpUI, ActionTapUI, ActionDelayUI
 from protocol.constants import VIAL_PROTOCOL_ADVANCED_MACROS
