@@ -15,6 +15,7 @@ from autorefresh.autorefresh import Autorefresh
 from editor.alt_repeat_key import AltRepeatKey
 from editor.combos import Combos
 from constants import WINDOW_WIDTH, WINDOW_HEIGHT
+from editor.athena_gif import AthenaGifEditor
 from widgets.editor_container import EditorContainer
 from editor.firmware_flasher import FirmwareFlasher
 from editor.key_override import KeyOverride
@@ -76,6 +77,7 @@ class MainWindow(QMainWindow):
         self.layout_editor = LayoutEditor()
         self.keymap_editor = KeymapEditor(self.layout_editor)
         self.firmware_flasher = FirmwareFlasher(self)
+        self.athena_gif_editor = AthenaGifEditor(self)
         self.macro_recorder = MacroRecorder()
         self.tap_dance = TapDance()
         self.combos = Combos()
@@ -89,7 +91,8 @@ class MainWindow(QMainWindow):
         self.editors = [(self.keymap_editor, "Keymap"), (self.layout_editor, "Layout"), (self.macro_recorder, "Macros"),
                         (self.rgb_configurator, "Lighting"), (self.tap_dance, "Tap Dance"), (self.combos, "Combos"),
                         (self.key_override, "Key Overrides"), (self.alt_repeat_key, "Alt Repeat Key"),
-                        (self.qmk_settings, "QMK Settings"), (self.matrix_tester, "Matrix tester"),
+                        (self.qmk_settings, "QMK Settings"), (self.athena_gif_editor, "Athena GIF"),
+                        (self.matrix_tester, "Matrix tester"),
                         (self.firmware_flasher, "Firmware updater")]
 
         Unlocker.global_layout_editor = self.layout_editor
@@ -338,7 +341,7 @@ class MainWindow(QMainWindow):
 
         for e in [self.layout_editor, self.keymap_editor, self.firmware_flasher, self.macro_recorder,
                   self.tap_dance, self.combos, self.key_override, self.alt_repeat_key,
-                  self.qmk_settings, self.matrix_tester, self.rgb_configurator]:
+                  self.qmk_settings, self.athena_gif_editor, self.matrix_tester, self.rgb_configurator]:
             e.rebuild(self.autorefresh.current_device)
 
     def refresh_tabs(self):
