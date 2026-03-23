@@ -2,17 +2,27 @@ name: Build
 
 on:
   push:
+    tags:
+      - "v*"
+    branches:
+      - "**"
   pull_request:
   workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   build-macos:
     runs-on: macos-15
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -28,18 +38,22 @@ jobs:
           source venv/bin/activate
           pyinstaller --noconfirm vial.spec
 
+      - name: Package artifact
+        run: |
+          ditto -c -k --sequesterRsrc --keepParent dist/Vial.app vial-macos.zip
+
       - uses: actions/upload-artifact@v4
         with:
           name: vial-macos
-          path: dist/Vial.app
+          path: vial-macos.zip
 
   build-linux:
     runs-on: ubuntu-24.04
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -60,18 +74,22 @@ jobs:
           source venv/bin/activate
           pyinstaller --noconfirm vial.spec
 
+      - name: Package artifact
+        run: |
+          tar -czf vial-linux.tar.gz -C dist Vial
+
       - uses: actions/upload-artifact@v4
         with:
           name: vial-linux
-          path: dist/Vial
+          path: vial-linux.tar.gz
 
   build-windows:
     runs-on: windows-2025
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
@@ -89,7 +107,40 @@ jobs:
           . .\venv\Scripts\Activate.ps1
           pyinstaller --noconfirm vial.spec
 
+      - name: Package artifact
+        shell: powershell
+        run: |
+          Compress-Archive -Path "dist\Vial*" -DestinationPath "vial-windows.zip" -Force
+
       - uses: actions/upload-artifact@v4
         with:
           name: vial-windows
-          path: dist/Vial
+          path: vial-windows.zip
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs:
+      - build-macos
+      - build-linux
+      - build-windows
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+
+      - name: Create or update release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${GITHUB_REF#refs/tags/}"
+          gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --title "$tag"
+          gh release upload "$tag" \
+            release-artifacts/vial-macos/vial-macos.zip \
+            release-artifacts/vial-linux/vial-linux.tar.gz \
+            release-artifacts/vial-windows/vial-windows.zip \
+            --clobber

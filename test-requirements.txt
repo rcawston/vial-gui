@@ -11,5 +11,5 @@ pytest==7.0.1
 pytest-qt==4.0.2
 pytest-xvfb==2.0.0
 simpleeval==1.0.3
-pywin32==303; sys_platform == 'win32'
+pywin32==311; sys_platform == 'win32'
 certifi
