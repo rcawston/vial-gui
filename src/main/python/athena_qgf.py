@@ -2,7 +2,7 @@ import io
 import math
 from colorsys import rgb_to_hsv
 
-from PIL import ImageChops
+from PIL import Image, ImageChops
 
 
 RGB565_FORMAT = {
@@ -253,6 +253,206 @@ def encode_qgf(frames, delays_ms, *, use_rle=True, use_deltas=True):
     buf.seek(offsets_pos)
     offsets.write(buf)
     return buf.getvalue()
+
+
+def _i16(data, offset):
+    return int.from_bytes(data[offset:offset + 2], byteorder="little")
+
+
+def _i24(data, offset):
+    return int.from_bytes(data[offset:offset + 3], byteorder="little")
+
+
+def _i32(data, offset):
+    return int.from_bytes(data[offset:offset + 4], byteorder="little")
+
+
+def _validate_block(data, offset, expected_type):
+    if offset + 5 > len(data):
+        raise ValueError("truncated QGF block")
+    type_id = data[offset]
+    neg_type_id = data[offset + 1]
+    if type_id != expected_type or neg_type_id != ((~expected_type) & 0xFF):
+        raise ValueError("unexpected QGF block")
+    return _i24(data, offset + 2)
+
+
+def parse_qgf_header(data):
+    if len(data) < 23:
+        raise ValueError("QGF too small")
+    length = _validate_block(data, 0, _QGFGraphicsDescriptor.TYPE_ID)
+    if length != 18:
+        raise ValueError("invalid QGF graphics descriptor")
+    if _i24(data, 5) != _QGFGraphicsDescriptor.MAGIC or data[8] != 1:
+        raise ValueError("invalid QGF header")
+    total_size = _i32(data, 9)
+    if (_i32(data, 13) ^ 0xFFFFFFFF) != total_size:
+        raise ValueError("invalid QGF size negation")
+    return {
+        "total_size": total_size,
+        "width": _i16(data, 17),
+        "height": _i16(data, 19),
+        "frame_count": _i16(data, 21),
+    }
+
+
+def _decode_qmk_rle(data, expected_length):
+    out = bytearray()
+    idx = 0
+    while idx < len(data) and len(out) < expected_length:
+        control = data[idx]
+        idx += 1
+        if control <= 127:
+            if idx >= len(data):
+                raise ValueError("truncated QGF RLE repeat")
+            out.extend([data[idx]] * control)
+            idx += 1
+        else:
+            count = control - 127
+            out.extend(data[idx:idx + count])
+            idx += count
+    if len(out) != expected_length:
+        raise ValueError("decoded QGF RLE length mismatch")
+    return bytes(out)
+
+
+def _rgb565_bytes_to_image(data, width, height):
+    if len(data) != width * height * 2:
+        raise ValueError("invalid RGB565 payload length")
+    pixels = bytearray()
+    for idx in range(0, len(data), 2):
+        msb = data[idx]
+        lsb = data[idx + 1]
+        r = ((msb >> 3) & 0x1F) * 255 // 31
+        g = (((msb & 0x07) << 3) | ((lsb >> 5) & 0x07)) * 255 // 63
+        b = (lsb & 0x1F) * 255 // 31
+        pixels.extend((r, g, b))
+    return Image.frombytes("RGB", (width, height), bytes(pixels))
+
+
+def decode_qgf_first_frame(data):
+    header = parse_qgf_header(data)
+    offset_table_length = _validate_block(data, 23, _QGFFrameOffsets.TYPE_ID)
+    frame_count = header["frame_count"]
+    if offset_table_length != frame_count * 4:
+        raise ValueError("invalid QGF frame offset table")
+    frame0_offset = _i32(data, 28)
+
+    frame_length = _validate_block(data, frame0_offset, _QGFFrameDescriptor.TYPE_ID)
+    if frame_length != 6:
+        raise ValueError("invalid QGF frame descriptor")
+    format_byte = data[frame0_offset + 5]
+    flags = data[frame0_offset + 6]
+    compression = data[frame0_offset + 7]
+    if format_byte != RGB565_FORMAT["image_format_byte"]:
+        raise ValueError("unsupported QGF image format")
+    if flags & 0x02:
+        raise ValueError("delta first frame is unsupported")
+
+    data_offset = frame0_offset + 11
+    payload_length = _validate_block(data, data_offset, _QGFDataDescriptor.TYPE_ID)
+    payload = data[data_offset + 5:data_offset + 5 + payload_length]
+    expected_size = header["width"] * header["height"] * 2
+    if compression == 0x00:
+        decoded = payload
+    elif compression == 0x01:
+        decoded = _decode_qmk_rle(payload, expected_size)
+    else:
+        raise ValueError("unsupported QGF compression")
+    return _rgb565_bytes_to_image(decoded, header["width"], header["height"]), header
+
+
+def _parse_qgf_offsets(data, header):
+    offset_table_length = _validate_block(data, 23, _QGFFrameOffsets.TYPE_ID)
+    frame_count = header["frame_count"]
+    if offset_table_length != frame_count * 4:
+        raise ValueError("invalid QGF frame offset table")
+    offsets_start = 28
+    return [_i32(data, offsets_start + idx * 4) for idx in range(frame_count)]
+
+
+def _decode_qgf_frame(data, header, offset, previous_frame):
+    frame_length = _validate_block(data, offset, _QGFFrameDescriptor.TYPE_ID)
+    if frame_length != 6:
+        raise ValueError("invalid QGF frame descriptor")
+    format_byte = data[offset + 5]
+    flags = data[offset + 6]
+    compression = data[offset + 7]
+    delay_ms = _i16(data, offset + 9)
+    if format_byte != RGB565_FORMAT["image_format_byte"]:
+        raise ValueError("unsupported QGF image format")
+
+    is_delta = bool(flags & 0x02)
+    data_offset = offset + 11
+    bbox = None
+    if is_delta:
+        delta_length = _validate_block(data, data_offset, _QGFDeltaDescriptor.TYPE_ID)
+        if delta_length != 8:
+            raise ValueError("invalid QGF delta descriptor")
+        bbox = (
+            _i16(data, data_offset + 5),
+            _i16(data, data_offset + 7),
+            _i16(data, data_offset + 9),
+            _i16(data, data_offset + 11),
+        )
+        data_offset += 13
+
+    payload_length = _validate_block(data, data_offset, _QGFDataDescriptor.TYPE_ID)
+    payload = data[data_offset + 5:data_offset + 5 + payload_length]
+
+    if is_delta:
+        if previous_frame is None:
+            raise ValueError("delta first frame is unsupported")
+        left, top, right, bottom = bbox
+        width = right - left + 1
+        height = bottom - top + 1
+    else:
+        width = header["width"]
+        height = header["height"]
+
+    expected_size = width * height * 2
+    if compression == 0x00:
+        decoded = payload
+    elif compression == 0x01:
+        decoded = _decode_qmk_rle(payload, expected_size)
+    else:
+        raise ValueError("unsupported QGF compression")
+
+    image = _rgb565_bytes_to_image(decoded, width, height)
+    if is_delta:
+        composited = previous_frame.copy()
+        composited.paste(image, (left, top))
+        image = composited
+    return image, delay_ms
+
+
+def decode_qgf_frames(data):
+    header = parse_qgf_header(data)
+    offsets = _parse_qgf_offsets(data, header)
+    frames = []
+    delays = []
+    previous = None
+    for offset in offsets:
+        frame, delay_ms = _decode_qgf_frame(data, header, offset, previous)
+        frames.append(frame)
+        delays.append(max(1, int(delay_ms)))
+        previous = frame
+    return frames, delays, header
+
+
+def qgf_first_frame_region_length(data):
+    header = parse_qgf_header(data)
+    offset_table_length = _validate_block(data, 23, _QGFFrameOffsets.TYPE_ID)
+    frame_count = header["frame_count"]
+    if offset_table_length != frame_count * 4:
+        raise ValueError("invalid QGF frame offset table")
+    frame0_offset = _i32(data, 28)
+    frame_length = _validate_block(data, frame0_offset, _QGFFrameDescriptor.TYPE_ID)
+    if frame_length != 6:
+        raise ValueError("invalid QGF frame descriptor")
+    data_offset = frame0_offset + 11
+    payload_length = _validate_block(data, data_offset, _QGFDataDescriptor.TYPE_ID)
+    return data_offset + 5 + payload_length
 
 
 UF2_FAMILY_ID_RP2040 = 0xE48BFF56

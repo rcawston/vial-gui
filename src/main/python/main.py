@@ -25,7 +25,7 @@ def show_exception_box(log_msg):
     if QtWidgets.QApplication.instance() is not None:
         errorbox = QtWidgets.QMessageBox()
         errorbox.setText(log_msg)
-        errorbox.exec_()
+        errorbox.exec()
 
 
 class UncaughtHook(QtCore.QObject):

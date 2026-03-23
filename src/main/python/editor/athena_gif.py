@@ -5,9 +5,10 @@ from PIL import Image, ImageSequence
 from qt_compat.QtCore import Qt, QRectF, QPointF, QSizeF, QTimer, pyqtSignal
 from qt_compat.QtGui import QPainter, QPen, QPixmap, QColor, QImage
 from qt_compat.QtWidgets import QHBoxLayout, QVBoxLayout, QGridLayout, QLabel, QLineEdit, QToolButton, QFileDialog, \
-    QDialog, QSpinBox, QCheckBox, QComboBox, QPlainTextEdit, QProgressBar, QMessageBox, QColorDialog
+    QDialog, QSpinBox, QCheckBox, QComboBox, QPlainTextEdit, QProgressBar, QMessageBox, QColorDialog, QFrame, QWidget, QSizePolicy, QMenu
 
-from athena_qgf import encode_qgf, encode_uf2
+from athena_qgf import encode_qgf, encode_uf2, decode_qgf_first_frame, decode_qgf_frames, qgf_first_frame_region_length, parse_qgf_header
+from autorefresh.autorefresh import Autorefresh
 from editor.basic_editor import BasicEditor
 from util import tr, hid_send
 from vial_device import VialKeyboard
@@ -30,6 +31,10 @@ ATHENA_GIF_GET_INFO = 0xA0
 ATHENA_GIF_BEGIN_UPLOAD = 0xA1
 ATHENA_GIF_WRITE_CHUNK = 0xA2
 ATHENA_GIF_FINISH_UPLOAD = 0xA3
+ATHENA_GIF_GET_SLOT_INFO = 0xA5
+ATHENA_GIF_READ_CHUNK = 0xA6
+
+ATHENA_SLOT_NAMES = ["GIF0 CapsLock", "GIF1 Typing", "GIF2", "GIF3", "GIF4", "GIF5"]
 
 ATHENA_STATUS_TEXT = {
     0: "OK",
@@ -74,6 +79,54 @@ def athena_upload(dev, slot, qgf_bytes, activate, progress_cb, log_cb):
 
     finish = bytes([ATHENA_HID_PREFIX, ATHENA_GIF_FINISH_UPLOAD, 1 if activate else 0])
     athena_check_status(athena_send(dev, finish, retries=1, timeout_ms=3000))
+
+
+def athena_get_slot_info(dev, slot):
+    resp = athena_send(dev, bytes([ATHENA_HID_PREFIX, ATHENA_GIF_GET_SLOT_INFO, slot]), retries=2, timeout_ms=2000)
+    athena_check_status(resp)
+    return {
+        "slot": resp[3],
+        "valid": bool(resp[4]),
+        "active": bool(resp[5]),
+        "slot_size": int.from_bytes(resp[6:10], byteorder="little"),
+        "total_size": int.from_bytes(resp[10:14], byteorder="little"),
+        "width": int.from_bytes(resp[14:16], byteorder="little"),
+        "height": int.from_bytes(resp[16:18], byteorder="little"),
+        "frame_count": int.from_bytes(resp[18:20], byteorder="little"),
+    }
+
+
+def athena_read_slot_bytes(dev, slot, offset, length, progress_cb=None):
+    data = bytearray()
+    while len(data) < length:
+        request_len = min(24, length - len(data))
+        payload = bytes([ATHENA_HID_PREFIX, ATHENA_GIF_READ_CHUNK, slot]) + (offset + len(data)).to_bytes(4, byteorder="little") + bytes([request_len])
+        resp = athena_send(dev, payload, retries=2, timeout_ms=2000)
+        athena_check_status(resp)
+        actual_len = resp[3]
+        if actual_len == 0:
+            raise RuntimeError("Empty readback chunk")
+        data.extend(resp[4:4 + actual_len])
+        if progress_cb is not None and length > 0:
+            progress_cb(len(data) / length)
+    return bytes(data[:length])
+
+
+def athena_read_slot_preview(dev, slot):
+    data = athena_read_slot_bytes(dev, slot, 0, 64)
+    while True:
+        try:
+            required = qgf_first_frame_region_length(data)
+            break
+        except ValueError as exc:
+            if "truncated" not in str(exc):
+                raise
+            next_len = len(data) + 256
+            data = athena_read_slot_bytes(dev, slot, 0, next_len)
+    if required > len(data):
+        data = athena_read_slot_bytes(dev, slot, 0, required)
+    image, header = decode_qgf_first_frame(data[:required])
+    return image, header
 
 
 def pil_to_qpixmap(image):
@@ -210,6 +263,9 @@ class AthenaGifEditor(BasicEditor):
     progress_signal = pyqtSignal(object)
     done_signal = pyqtSignal(object)
     error_signal = pyqtSignal(object)
+    slot_result_signal = pyqtSignal(object, object, object)
+    slot_refresh_state_signal = pyqtSignal(object)
+    save_done_signal = pyqtSignal(object)
 
     def __init__(self, main, parent=None):
         super().__init__(parent)
@@ -217,29 +273,65 @@ class AthenaGifEditor(BasicEditor):
         self.frames = []
         self.durations = []
         self.source_path = ""
+        self.raw_qgf = None
+        self.raw_qgf_header = None
+        self.raw_qgf_delays = []
         self.preview_frames = []
         self.preview_durations = []
         self.preview_index = 0
         self.preview_timer = QTimer()
         self.preview_timer.timeout.connect(self._advance_preview_frame)
         self.background_color = QColor(0, 0, 0)
+        self.slot_cards = []
+        self.slot_refresh_active = False
+        self.transfer_active = False
 
         self.log_signal.connect(self._on_log)
         self.progress_signal.connect(self._on_progress)
         self.done_signal.connect(self._on_done)
         self.error_signal.connect(self._on_error)
+        self.slot_result_signal.connect(self._on_slot_result)
+        self.slot_refresh_state_signal.connect(self._on_slot_refresh_state)
+        self.save_done_signal.connect(self._on_save_done)
+
+        gallery_panel, gallery_layout = self._make_panel("Keyboard slots", with_header_row=True)
+        gallery_header = gallery_layout.itemAt(0).layout()
+        gallery_header.addStretch(1)
+        self.btn_refresh_slots = QToolButton()
+        self.btn_refresh_slots.setText("Refresh slots")
+        self.btn_refresh_slots.clicked.connect(self.refresh_slots_async)
+        self.btn_refresh_slots.setProperty("role", "secondary")
+        gallery_header.addWidget(self.btn_refresh_slots)
+
+        self.slot_grid = QGridLayout()
+        self.slot_grid.setHorizontalSpacing(12)
+        self.slot_grid.setVerticalSpacing(12)
+        for idx, name in enumerate(ATHENA_SLOT_NAMES):
+            card = self._create_slot_card(idx, name)
+            self.slot_cards.append(card)
+            self.slot_grid.addWidget(card["frame"], idx // 3, idx % 3)
+        gallery_layout.addLayout(self.slot_grid)
+        self.addWidget(gallery_panel)
+
+        content_row = QHBoxLayout()
+
+        left_panel, left_layout = self._make_panel("Create and upload")
 
         file_row = QHBoxLayout()
         self.txt_path = QLineEdit()
         self.txt_path.setReadOnly(True)
         file_row.addWidget(self.txt_path)
         self.btn_select = QToolButton()
-        self.btn_select.setText(tr("AthenaGif", "Select GIF..."))
+        self.btn_select.setText(tr("AthenaGif", "Select GIF/QGF..."))
         self.btn_select.clicked.connect(self.on_select_file)
+        self.btn_select.setToolButtonStyle(Qt.ToolButtonTextOnly)
+        self.btn_select.setProperty("role", "primary")
         file_row.addWidget(self.btn_select)
-        self.addLayout(file_row)
+        left_layout.addLayout(file_row)
 
         controls = QGridLayout()
+        controls.setHorizontalSpacing(10)
+        controls.setVerticalSpacing(8)
         controls.addWidget(QLabel("Slot"), 0, 0)
         self.combo_slot = QComboBox()
         for idx, name in enumerate(["GIF0 CapsLock", "GIF1 Typing", "GIF2", "GIF3", "GIF4", "GIF5"]):
@@ -275,42 +367,268 @@ class AthenaGifEditor(BasicEditor):
 
         self.lbl_summary = QLabel("No GIF loaded")
         controls.addWidget(self.lbl_summary, 2, 0, 1, 6)
-        self.addLayout(controls)
+        left_layout.addLayout(controls)
 
-        previews = QHBoxLayout()
-        left = QVBoxLayout()
-        left.addWidget(QLabel("Crop"))
+        crop_row = QHBoxLayout()
+        crop_col = QVBoxLayout()
+        crop_col.addWidget(QLabel("Crop area"))
         self.cropper = CropPreviewLabel()
         self.cropper.selectionChanged.connect(self.update_preview)
-        left.addWidget(self.cropper)
-        previews.addLayout(left, 1)
+        crop_col.addWidget(self.cropper)
+        crop_row.addLayout(crop_col, 3)
 
-        right = QVBoxLayout()
-        right.addWidget(QLabel("128x128 preview"))
+        preview_col = QVBoxLayout()
+        preview_col.addWidget(QLabel("Device preview"))
         self.preview_label = QLabel()
         self.preview_label.setAlignment(Qt.AlignCenter)
-        self.preview_label.setMinimumSize(200, 200)
-        right.addWidget(self.preview_label)
-        previews.addLayout(right, 1)
-        self.addLayout(previews)
+        self.preview_label.setMinimumSize(220, 220)
+        self.preview_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.preview_label.setStyleSheet("QLabel { background: #111418; border: 1px solid #2f343d; border-radius: 8px; }")
+        preview_col.addWidget(self.preview_label, 1)
+
+        preview_note = QLabel("128 x 128 processed output")
+        preview_note.setProperty("muted", True)
+        preview_col.addWidget(preview_note)
+        crop_row.addLayout(preview_col, 2)
+        left_layout.addLayout(crop_row, 1)
 
         buttons = QHBoxLayout()
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)
         buttons.addWidget(self.progress, 1)
         self.btn_save = QToolButton()
-        self.btn_save.setText("Save UF2")
+        self.btn_save.setText("Create UF2")
         self.btn_save.clicked.connect(self.on_save_uf2)
+        self.btn_save.setProperty("role", "secondary")
         buttons.addWidget(self.btn_save)
         self.btn_upload = QToolButton()
         self.btn_upload.setText("Upload")
         self.btn_upload.clicked.connect(self.on_upload)
+        self.btn_upload.setProperty("role", "primary")
         buttons.addWidget(self.btn_upload)
-        self.addLayout(buttons)
+        left_layout.addLayout(buttons)
+
+        right_panel, right_layout = self._make_panel("Transfer log")
+        help_text = QLabel("Use the slot gallery to inspect what is on the keyboard now. Upload writes the selected slot directly over HID.")
+        help_text.setWordWrap(True)
+        help_text.setProperty("muted", True)
+        right_layout.addWidget(help_text)
 
         self.log_box = QPlainTextEdit()
         self.log_box.setReadOnly(True)
-        self.addWidget(self.log_box)
+        right_layout.addWidget(self.log_box, 1)
+
+        content_row.addWidget(left_panel, 3)
+        content_row.addWidget(right_panel, 2)
+        self.addLayout(content_row)
+
+        self._apply_styles([
+            gallery_panel,
+            left_panel,
+            right_panel,
+            self.cropper,
+            self.preview_label,
+            self.log_box,
+            self.txt_path,
+            self.combo_slot,
+            self.spin_start,
+            self.spin_end,
+            self.progress,
+        ])
+
+    def _apply_styles(self, widgets):
+        stylesheet = """
+            QFrame[panel="true"] {
+                background: #2c2f34;
+                border: 1px solid #454b55;
+                border-radius: 10px;
+            }
+            QLabel[muted="true"] {
+                color: #b6bcc7;
+            }
+            QToolButton[role="primary"] {
+                background: #2f7df6;
+                color: white;
+                border: 1px solid #4d91f8;
+                border-radius: 6px;
+                padding: 6px 10px;
+            }
+            QToolButton[role="secondary"] {
+                background: #3a3f46;
+                color: #eef2f7;
+                border: 1px solid #575e69;
+                border-radius: 6px;
+                padding: 6px 10px;
+            }
+            QLineEdit, QComboBox, QSpinBox, QPlainTextEdit {
+                background: #1f2329;
+                border: 1px solid #4a505a;
+                border-radius: 6px;
+                padding: 4px 6px;
+            }
+            QProgressBar {
+                background: #1f2329;
+                border: 1px solid #4a505a;
+                border-radius: 6px;
+                text-align: center;
+            }
+            QProgressBar::chunk {
+                background: #2f7df6;
+                border-radius: 6px;
+            }
+        """
+        for widget in widgets:
+            widget.setStyleSheet(stylesheet)
+
+    def _make_panel(self, title, with_header_row=False):
+        frame = QFrame()
+        frame.setProperty("panel", True)
+        layout = QVBoxLayout(frame)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
+
+        label = QLabel(title)
+        label.setStyleSheet("font-weight: 600; font-size: 13px;")
+        if with_header_row:
+            header = QHBoxLayout()
+            header.addWidget(label)
+            layout.addLayout(header)
+        else:
+            layout.addWidget(label)
+        return frame, layout
+
+    def _create_slot_card(self, idx, name):
+        frame = QFrame()
+        frame.setFrameShape(QFrame.Shape.StyledPanel)
+        frame.setStyleSheet("""
+            QFrame {
+                background: #262a30;
+                border: 1px solid #4a505a;
+                border-radius: 8px;
+                padding: 6px;
+            }
+        """)
+
+        layout = QVBoxLayout()
+        title = QLabel(name)
+        title.setStyleSheet("QLabel { font-weight: bold; }")
+        layout.addWidget(title)
+
+        thumb = QLabel("No preview")
+        thumb.setAlignment(Qt.AlignCenter)
+        thumb.setMinimumSize(120, 120)
+        thumb.setStyleSheet("QLabel { background: #14171b; border: 1px solid #3b414b; border-radius: 6px; }")
+        layout.addWidget(thumb)
+
+        actions = QHBoxLayout()
+
+        use_button = QToolButton()
+        use_button.setText("Use slot")
+        use_button.setProperty("role", "secondary")
+        use_button.clicked.connect(lambda _checked=False, x=idx: self.combo_slot.setCurrentIndex(x))
+        actions.addWidget(use_button)
+
+        save_qgf_button = QToolButton()
+        save_qgf_button.setText("Save QGF")
+        save_qgf_button.setProperty("role", "secondary")
+        save_qgf_button.clicked.connect(lambda _checked=False, x=idx: self.on_save_slot_qgf(x))
+        actions.addWidget(save_qgf_button)
+
+        save_gif_button = QToolButton()
+        save_gif_button.setText("Save GIF")
+        save_gif_button.setProperty("role", "secondary")
+        save_gif_button.clicked.connect(lambda _checked=False, x=idx: self.on_save_slot_gif(x))
+        actions.addWidget(save_gif_button)
+
+        save_uf2_button = QToolButton()
+        save_uf2_button.setText("Save UF2")
+        save_uf2_button.setProperty("role", "secondary")
+        save_uf2_button.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
+        uf2_menu = QMenu(save_uf2_button)
+        for target_slot in range(len(ATHENA_SLOT_NAMES)):
+            action = uf2_menu.addAction("Save for GIF{}".format(target_slot))
+            action.triggered.connect(lambda _checked=False, source=idx, target=target_slot: self.on_save_slot_uf2(source, target))
+        save_uf2_button.setMenu(uf2_menu)
+        actions.addWidget(save_uf2_button)
+
+        layout.addLayout(actions)
+
+        frame.setLayout(layout)
+        return {"frame": frame, "title": title, "thumb": thumb, "use_button": use_button,
+                "save_qgf_button": save_qgf_button, "save_gif_button": save_gif_button, "save_uf2_button": save_uf2_button}
+
+    def _set_slot_card(self, idx, info, image=None):
+        card = self.slot_cards[idx]
+        title = ATHENA_SLOT_NAMES[idx]
+        if info.get("valid"):
+            title += " - {}x{} - {}f - {} KB".format(
+                info["width"],
+                info["height"],
+                info["frame_count"],
+                max(1, info["total_size"] // 1024),
+            )
+        else:
+            title += " - Empty / invalid"
+        card["title"].setText(title)
+        card["frame"].setStyleSheet("""
+            QFrame {
+                background: #262a30;
+                border: 1px solid #4a505a;
+                border-radius: 8px;
+                padding: 6px;
+            }
+        """)
+        if image is not None:
+            pixmap = pil_to_qpixmap(image)
+            card["thumb"].setPixmap(pixmap.scaled(120, 120, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            card["thumb"].setText("")
+        else:
+            card["thumb"].clear()
+            card["thumb"].setText("Empty")
+
+    def refresh_slots(self):
+        if not self.valid():
+            for idx in range(len(self.slot_cards)):
+                self._set_slot_card(idx, {"valid": False, "active": False})
+            return
+
+        for idx in range(len(self.slot_cards)):
+            try:
+                info = athena_get_slot_info(self.device.dev, idx)
+                image = None
+                if info["valid"]:
+                    image, _header = athena_read_slot_preview(self.device.dev, idx)
+                self._set_slot_card(idx, info, image=image)
+            except Exception as exc:
+                self._set_slot_card(idx, {"valid": False, "active": False})
+                self.log("Slot {} refresh failed: {}".format(idx, exc))
+
+    def refresh_slots_async(self):
+        if self.slot_refresh_active:
+            return
+        if not self.valid():
+            self.refresh_slots()
+            return
+
+        self.slot_refresh_state_signal.emit(True)
+        threading.Thread(target=self._refresh_slots_worker, daemon=True).start()
+
+    def _refresh_slots_worker(self):
+        try:
+            with Autorefresh.lock():
+                for idx in range(len(self.slot_cards)):
+                    info = athena_get_slot_info(self.device.dev, idx)
+                    image = None
+                    if info["valid"]:
+                        try:
+                            image, _header = athena_read_slot_preview(self.device.dev, idx)
+                        except Exception as exc:
+                            self.log_signal.emit("GIF{} preview unavailable: {}".format(idx, exc))
+                    self.slot_result_signal.emit(idx, info, image)
+        except Exception as exc:
+            self.log_signal.emit("Slot refresh failed: {}".format(exc))
+        finally:
+            self.slot_refresh_state_signal.emit(False)
 
     def valid(self):
         return isinstance(self.device, VialKeyboard) and \
@@ -321,24 +639,35 @@ class AthenaGifEditor(BasicEditor):
         super().rebuild(device)
         if not self.valid():
             return
+        self.refresh_slots_async()
 
     def on_select_file(self):
         filename, _ = QFileDialog.getOpenFileName(
             self.btn_select.window(),
-            tr("AthenaGif", "Select GIF"),
+            tr("AthenaGif", "Select GIF/QGF"),
             "",
-            "GIF files (*.gif)",
+            "Animation files (*.gif *.qgf *.qcf);;GIF files (*.gif);;QGF files (*.qgf *.qcf)",
         )
         if not filename:
             return
         self.source_path = filename
         self.txt_path.setText(self.source_path)
         try:
-            self._load_gif(self.source_path)
+            self._load_source(self.source_path)
         except Exception as exc:
             QMessageBox.warning(self.btn_select.window(), "", str(exc))
 
+    def _load_source(self, path):
+        ext = os.path.splitext(path)[1].lower()
+        if ext in [".qgf", ".qcf"]:
+            self._load_qgf(path)
+        else:
+            self._load_gif(path)
+
     def _load_gif(self, path):
+        self.raw_qgf = None
+        self.raw_qgf_header = None
+        self.raw_qgf_delays = []
         image = Image.open(path)
         self.frames = []
         self.durations = []
@@ -357,6 +686,30 @@ class AthenaGifEditor(BasicEditor):
         self.cropper.set_image(self._flatten_frame(self.frames[0]))
         self.log("Loaded GIF with {} frames".format(len(self.frames)))
         self.update_preview()
+
+    def _load_qgf(self, path):
+        with open(path, "rb") as inf:
+            self.raw_qgf = inf.read()
+        frames, delays, self.raw_qgf_header = decode_qgf_frames(self.raw_qgf)
+        self.raw_qgf_delays = delays
+        self.frames = []
+        self.durations = []
+        self.cropper.set_image(frames[0])
+        self.preview_frames = [pil_to_qpixmap(frame) for frame in frames]
+        self.preview_durations = [max(20, int(delay)) for delay in delays]
+        self.preview_index = 0
+        self._render_preview_frame()
+        if len(self.preview_frames) > 1:
+            self.preview_timer.start(self.preview_durations[0])
+        else:
+            self.preview_timer.stop()
+        self.lbl_summary.setText("QGF/QCF loaded: {}x{} • {}f • {} KB".format(
+            self.raw_qgf_header["width"],
+            self.raw_qgf_header["height"],
+            self.raw_qgf_header["frame_count"],
+            max(1, self.raw_qgf_header["total_size"] // 1024),
+        ))
+        self.log("Loaded QGF/QCF payload with {} frames".format(self.raw_qgf_header["frame_count"]))
 
     def _update_background_button(self):
         self.btn_background.setText(self.background_color.name().upper())
@@ -394,6 +747,8 @@ class AthenaGifEditor(BasicEditor):
         return ATHENA_SLOT_LIMITS[self._selected_slot()]
 
     def _build_processed_frames(self):
+        if self.raw_qgf is not None:
+            raise RuntimeError("Crop and frame editing are only available for GIF sources")
         if not self.frames:
             raise RuntimeError("No GIF loaded")
 
@@ -435,6 +790,8 @@ class AthenaGifEditor(BasicEditor):
         return out_frames, durations
 
     def update_preview(self):
+        if self.raw_qgf is not None:
+            return
         if not self.frames:
             return
         try:
@@ -473,6 +830,8 @@ class AthenaGifEditor(BasicEditor):
         self.preview_timer.start(self.preview_durations[self.preview_index])
 
     def _build_qgf(self):
+        if self.raw_qgf is not None:
+            return self.raw_qgf
         frames, durations = self._build_processed_frames()
         return encode_qgf(frames, durations, use_rle=True, use_deltas=True)
 
@@ -502,6 +861,104 @@ class AthenaGifEditor(BasicEditor):
             outf.write(uf2)
         self.log("Saved UF2 for slot GIF{}".format(slot))
 
+    def _download_slot_qgf(self, slot, progress_cb=None):
+        with Autorefresh.lock():
+            info = athena_get_slot_info(self.device.dev, slot)
+            if not info["valid"]:
+                raise RuntimeError("GIF{} is empty or invalid".format(slot))
+            return athena_read_slot_bytes(self.device.dev, slot, 0, info["total_size"], progress_cb=progress_cb)
+
+    def _start_slot_save_worker(self, source_slot, filename, mode, target_slot):
+        if self.transfer_active:
+            return
+        self.transfer_active = True
+        self.main.lock_ui()
+        self.progress.setValue(0)
+        if mode == "qgf":
+            self.log("Downloading GIF{} as QGF...".format(source_slot))
+        else:
+            self.log("Downloading GIF{} and saving UF2 for GIF{}...".format(source_slot, target_slot))
+        threading.Thread(
+            target=lambda: self._save_slot_worker(source_slot, filename, mode, target_slot),
+            daemon=True,
+        ).start()
+
+    def _save_slot_worker(self, source_slot, filename, mode, target_slot):
+        try:
+            payload = self._download_slot_qgf(source_slot, progress_cb=self.on_progress)
+            if mode == "uf2":
+                payload = encode_uf2(payload, ATHENA_SLOT_ADDR[target_slot])
+            elif mode == "gif":
+                frames, delays, _header = decode_qgf_frames(payload)
+                frames[0].save(
+                    filename,
+                    save_all=True,
+                    append_images=frames[1:],
+                    duration=delays,
+                    loop=0,
+                    optimize=False,
+                )
+                payload = None
+            if payload is not None:
+                with open(filename, "wb") as outf:
+                    outf.write(payload)
+        except Exception as exc:
+            self.on_error(str(exc))
+            return
+
+        if mode == "qgf":
+            self.save_done_signal.emit("Saved GIF{} as QGF".format(source_slot))
+        elif mode == "gif":
+            self.save_done_signal.emit("Saved GIF{} as animated GIF".format(source_slot))
+        else:
+            self.save_done_signal.emit("Saved GIF{} as UF2 targeting GIF{}".format(source_slot, target_slot))
+
+    def on_save_slot_qgf(self, slot):
+        if not self.valid():
+            return
+
+        filename, _ = QFileDialog.getSaveFileName(
+            self.btn_select.window(),
+            "Save GIF{} as QGF".format(slot),
+            "gif{}_download.qgf".format(slot),
+            "QGF files (*.qgf)",
+        )
+        if not filename:
+            return
+        if not filename.lower().endswith(".qgf"):
+            filename += ".qgf"
+        self._start_slot_save_worker(slot, filename, "qgf", slot)
+
+    def on_save_slot_uf2(self, source_slot, target_slot):
+        if not self.valid():
+            return
+        filename, _ = QFileDialog.getSaveFileName(
+            self.btn_select.window(),
+            "Save GIF{} as UF2 for GIF{}".format(source_slot, target_slot),
+            "gif{}_to_gif{}.uf2".format(source_slot, target_slot),
+            "UF2 files (*.uf2)",
+        )
+        if not filename:
+            return
+        if not filename.lower().endswith(".uf2"):
+            filename += ".uf2"
+        self._start_slot_save_worker(source_slot, filename, "uf2", target_slot)
+
+    def on_save_slot_gif(self, slot):
+        if not self.valid():
+            return
+        filename, _ = QFileDialog.getSaveFileName(
+            self.btn_select.window(),
+            "Save GIF{} as GIF".format(slot),
+            "gif{}_download.gif".format(slot),
+            "GIF files (*.gif)",
+        )
+        if not filename:
+            return
+        if not filename.lower().endswith(".gif"):
+            filename += ".gif"
+        self._start_slot_save_worker(slot, filename, "gif", slot)
+
     def on_upload(self):
         if not self.valid():
             return
@@ -521,7 +978,8 @@ class AthenaGifEditor(BasicEditor):
 
     def _upload_worker(self, qgf, slot, activate):
         try:
-            athena_upload(self.device.dev, slot, qgf, activate, self.on_progress, self.on_log)
+            with Autorefresh.lock():
+                athena_upload(self.device.dev, slot, qgf, activate, self.on_progress, self.on_log)
         except Exception as exc:
             self.on_error(str(exc))
             return
@@ -548,8 +1006,29 @@ class AthenaGifEditor(BasicEditor):
     def _on_done(self, msg):
         self.progress.setValue(100)
         self.log(msg)
+        self.refresh_slots_async()
         self.main.unlock_ui()
+        self.transfer_active = False
 
     def _on_error(self, msg):
         self.log("Error: {}".format(msg))
         self.main.unlock_ui()
+        self.transfer_active = False
+
+    def _on_slot_result(self, idx, info, image):
+        self._set_slot_card(idx, info, image=image)
+
+    def _on_slot_refresh_state(self, active):
+        self.slot_refresh_active = bool(active)
+        self.btn_refresh_slots.setEnabled(not self.slot_refresh_active)
+        self.btn_refresh_slots.setText("Refreshing..." if self.slot_refresh_active else "Refresh slots")
+        if self.slot_refresh_active:
+            self.log("Refreshing keyboard slots...")
+        else:
+            self.log("Slot refresh complete")
+
+    def _on_save_done(self, msg):
+        self.progress.setValue(100)
+        self.log(msg)
+        self.main.unlock_ui()
+        self.transfer_active = False

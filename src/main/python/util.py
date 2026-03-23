@@ -159,7 +159,7 @@ def make_scrollable(layout):
     w.setLayout(layout)
     w.setObjectName("w")
     scroll = QScrollArea()
-    scroll.setFrameShape(QFrame.NoFrame)
+    scroll.setFrameShape(QFrame.Shape.NoFrame)
     scroll.setStyleSheet("QScrollArea { background-color:transparent; }")
     w.setStyleSheet("#w { background-color:transparent; }")
     scroll.setWidgetResizable(True)

@@ -11,7 +11,7 @@ class AutorefreshLocker:
     def __enter__(self):
         self.autorefresh._lock()
 
-    def __exit__(self):
+    def __exit__(self, exc_type, exc_value, traceback):
         self.autorefresh._unlock()
 
 
