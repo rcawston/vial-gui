@@ -478,10 +478,13 @@ class KeyboardWidget(QWidget):
     def hit_test(self, pos):
         """ Returns key, hit_masked_part """
 
+        posf = QPointF(pos) if not isinstance(pos, QPointF) else pos
+        scaled_pos = posf / self.scale
+
         for key in self.widgets:
-            if key.masked and key.mask_polygon.containsPoint(pos/self.scale, Qt.OddEvenFill):
+            if key.masked and key.mask_polygon.containsPoint(scaled_pos, Qt.OddEvenFill):
                 return key, True
-            if key.polygon.containsPoint(pos/self.scale, Qt.OddEvenFill):
+            if key.polygon.containsPoint(scaled_pos, Qt.OddEvenFill):
                 return key, False
 
         return None, False
