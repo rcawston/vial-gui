@@ -13,7 +13,7 @@ script:
   - #!/bin/sh
   - HERE=$(dirname $(readlink -f "${0}"))
   - export QT_QPA_PLATFORM=xcb
-  - exec "${HERE}/opt/Vial/Vial" "$@"
+  - exec "${HERE}/opt/Vial/Vial-bin" "$@"
   - EOF
   - chmod a+x ./AppRun
   - cp usr/share/icons/hicolor/256x256/apps/Vial.png .
