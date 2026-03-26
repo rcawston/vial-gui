@@ -29,6 +29,6 @@ Categories=Utility;
 Terminal=false
 EOF
 
-fpm -s dir -t deb -n Vial -v "${VERSION}" -C target/pkgroot .
+fpm -s dir -t deb -n Vial -v "${VERSION}" -p target/Vial.deb -C target/pkgroot .
 /pkg2appimage-*/pkg2appimage misc/Vial.yml
 mv out/Vial-*.AppImage /output/Vial-x86_64.AppImage

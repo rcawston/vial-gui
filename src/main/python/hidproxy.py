@@ -46,6 +46,9 @@ if sys.platform == "emscripten":
             return hiddevice()
 
 elif sys.platform.startswith("linux"):
-    import hidraw as hid
+    try:
+        import hidraw as hid
+    except ImportError:
+        import hid
 else:
     import hid
