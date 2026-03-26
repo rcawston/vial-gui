@@ -83,6 +83,20 @@ jobs:
           name: vial-linux
           path: vial-linux.tar.gz
 
+  build-linux-appimage:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build AppImage
+        run: ./util/linux-builder/build-in-docker.sh
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: vial-linux-appimage
+          path: util/linux-builder/output/Vial-x86_64.AppImage
+
   build-windows:
     runs-on: windows-2025
 
@@ -122,6 +136,7 @@ jobs:
     needs:
       - build-macos
       - build-linux
+      - build-linux-appimage
       - build-windows
     runs-on: ubuntu-24.04
     permissions:
@@ -145,5 +160,6 @@ jobs:
           gh release upload "$tag" \
             release-artifacts/vial-macos/vial-macos.zip \
             release-artifacts/vial-linux/vial-linux.tar.gz \
+            release-artifacts/vial-linux-appimage/Vial-x86_64.AppImage \
             release-artifacts/vial-windows/vial-windows.zip \
             --clobber
